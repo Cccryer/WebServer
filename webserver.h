@@ -43,6 +43,8 @@ public:
     void dealwithread(int sockfd);
     void dealwithwrite(int sockfd);
 
+    void replaceConn(int fd, conn* new_conn);
+
 public:
     //基础
     int m_port;
@@ -53,7 +55,7 @@ public:
 
     int m_pipefd[2];
     int m_epollfd;
-    http_conn *users;
+    conn **users;
 
     //数据库相关
     connection_pool *m_connPool;
@@ -63,7 +65,7 @@ public:
     int m_sql_num;
 
     //线程池相关
-    threadpool<http_conn> *m_pool;
+    threadpool<conn*> *m_pool;
     int m_thread_num;
 
     //epoll_event相关
@@ -78,5 +80,8 @@ public:
     //定时器相关
     client_data *users_timer;
     Utils utils;
+    util_timer* del_pending_timer;
+    bool deltimer;
+
 };
 #endif

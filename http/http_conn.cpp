@@ -1,7 +1,15 @@
 #include "http_conn.h"
-
+#include "../gamebox/game.h"
+#include "../gamebox/user.h"
+#include "../gamebox/game_session.h"
+#include "../gamebox/game_manager.h"
+#include "../gamebox/gomoku.h"
+#include "../util/util.h"
 #include <mysql/mysql.h>
 #include <fstream>
+#include "setfd.h"
+
+#include "../wsocket/ws_conn.h"
 
 //定义http响应的一些状态信息
 const char *ok_200_title = "OK";
@@ -13,6 +21,7 @@ const char *error_404_title = "Not Found";
 const char *error_404_form = "The requested file was not found on this server.\n";
 const char *error_500_title = "Internal Error";
 const char *error_500_form = "There was an unusual problem serving the request file.\n";
+
 
 locker m_lock;
 map<string, string> users;
@@ -47,55 +56,55 @@ void http_conn::initmysql_result(connection_pool *connPool)
     }
 }
 
-//对文件描述符设置非阻塞
-int setnonblocking(int fd)
-{
-    int old_option = fcntl(fd, F_GETFL);
-    int new_option = old_option | O_NONBLOCK;
-    fcntl(fd, F_SETFL, new_option);
-    return old_option;
-}
+// //对文件描述符设置非阻塞
+// int setnonblocking(int fd)
+// {
+//     int old_option = fcntl(fd, F_GETFL);
+//     int new_option = old_option | O_NONBLOCK;
+//     fcntl(fd, F_SETFL, new_option);
+//     return old_option;
+// }
 
-//将内核事件表注册读事件，ET模式，选择开启EPOLLONESHOT
-void addfd(int epollfd, int fd, bool one_shot, int TRIGMode)
-{
-    epoll_event event;
-    event.data.fd = fd;
+// //将内核事件表注册读事件，ET模式，选择开启EPOLLONESHOT
+// void addfd(int epollfd, int fd, bool one_shot, int TRIGMode)
+// {
+//     epoll_event event;
+//     event.data.fd = fd;
 
-    if (1 == TRIGMode)
-        event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
-    else
-        event.events = EPOLLIN | EPOLLRDHUP;
+//     if (1 == TRIGMode)
+//         event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+//     else
+//         event.events = EPOLLIN | EPOLLRDHUP;
 
-    if (one_shot)
-        event.events |= EPOLLONESHOT;
-    epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
-    setnonblocking(fd);
-}
+//     if (one_shot)
+//         event.events |= EPOLLONESHOT;
+//     epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
+//     setnonblocking(fd);
+// }
 
-//从内核时间表删除描述符
-void removefd(int epollfd, int fd)
-{
-    epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);
-    close(fd);
-}
+// //从内核时间表删除描述符
+// void removefd(int epollfd, int fd)
+// {
+//     epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);
+//     close(fd);
+// }
 
-//将事件重置为EPOLLONESHOT
-void modfd(int epollfd, int fd, int ev, int TRIGMode)
-{
-    epoll_event event;
-    event.data.fd = fd;
+// //将事件重置为EPOLLONESHOT
+// void modfd(int epollfd, int fd, int ev, int TRIGMode)
+// {
+//     epoll_event event;
+//     event.data.fd = fd;
 
-    if (1 == TRIGMode)
-        event.events = ev | EPOLLET | EPOLLONESHOT | EPOLLRDHUP;
-    else
-        event.events = ev | EPOLLONESHOT | EPOLLRDHUP;
+//     if (1 == TRIGMode)
+//         event.events = ev | EPOLLET | EPOLLONESHOT | EPOLLRDHUP;
+//     else
+//         event.events = ev | EPOLLONESHOT | EPOLLRDHUP;
 
-    epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
-}
+//     epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
+// }
 
-int http_conn::m_user_count = 0;
-int http_conn::m_epollfd = -1;
+int conn::m_user_count = 0;
+int conn::m_epollfd = -1;
 
 //关闭连接，关闭一个连接，客户总量减一
 void http_conn::close_conn(bool real_close)
@@ -108,6 +117,8 @@ void http_conn::close_conn(bool real_close)
         m_user_count--;
     }
 }
+
+
 
 //初始化连接,外部调用初始化套接字地址
 void http_conn::init(int sockfd, const sockaddr_in &addr, char *root, int TRIGMode,
@@ -319,6 +330,30 @@ http_conn::HTTP_CODE http_conn::parse_headers(char *text)
         text += strspn(text, " \t");
         m_host = text;
     }
+    else if (strncasecmp(text, "Upgrade:", 8) == 0)
+    {
+        text += 8;
+        text += strspn(text, " \t");
+        m_websocketUp = true;
+    }
+    else if (strncasecmp(text, "Connection:", 11) == 0)
+    {
+        text += 11;
+        text += strspn(text, "\t");
+        m_websocketUp = true;
+    }
+    else if (strncasecmp(text, "Sec-WebSocket-Key:", 18) == 0)
+    {
+        text += 18;
+        text += strspn(text, " \t");
+        m_websocketKey = text;
+    }
+    else if (strncasecmp(text, "Sec-WebSocket-Version:", 22) == 0)
+    {
+        text += 22;
+        text += strspn(text, " \t");
+        m_websocketVer = atoi(text);
+    }
     else
     {
         LOG_INFO("oop!unknow header: %s", text);
@@ -389,9 +424,8 @@ http_conn::HTTP_CODE http_conn::do_request()
 {
     strcpy(m_real_file, doc_root);
     int len = strlen(doc_root);
-    //printf("m_url:%s\n", m_url);
+    printf("m_url:%s\n", m_url);
     const char *p = strrchr(m_url, '/');
-
     //处理cgi
     if (cgi == 1 && (*(p + 1) == '2' || *(p + 1) == '3'))
     {
@@ -406,7 +440,7 @@ http_conn::HTTP_CODE http_conn::do_request()
         free(m_url_real);
 
         //将用户名和密码提取出来
-        //user=123&passwd=123
+        //user=123&password=123   
         char name[100], password[100];
         int i;
         for (i = 5; m_string[i] != '&'; ++i)
@@ -450,7 +484,14 @@ http_conn::HTTP_CODE http_conn::do_request()
         else if (*(p + 1) == '2')
         {
             if (users.find(name) != users.end() && users[name] == password)
+            {
+                auto up = GameManager::get_manager().createUser(std::string(name), m_sockfd);
+                user = up;
+                //get from database
+                // user->setScore()
                 strcpy(m_url, "/welcome.html");
+            }
+                
             else
                 strcpy(m_url, "/logError.html");
         }
@@ -495,6 +536,123 @@ http_conn::HTTP_CODE http_conn::do_request()
         strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
 
         free(m_url_real);
+    }
+    else if (strncmp(p+1, "api-gamelist", 12) == 0) {
+        // 处理游戏列表请求
+        json gamesList = GameManager::get_manager().displayGames();
+        m_apiresponse = gamesList.dump();
+        return API_REQUEST;
+    }
+    else if(strncmp(p+1, "sessionslist", 12) == 0)
+    {
+        //请求sessionslist页面
+        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/sessionList.html");
+        strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
+
+        free(m_url_real);
+    }
+    else if(strncmp(p+1, "api-join-gomoku", 15) == 0)
+    {
+        //加入房间
+        //获取加入的房间号，通过内容回传回来
+        //gamename=?&sessionid=?
+        char gname[20], sid[10];
+        int i;
+
+        for(i = 9; m_string[i] != '&'; i++)
+            gname[i-9] = m_string[i];
+        gname[i-9] = '\0';
+
+        printf("gname is :%s\n", gname);
+
+        int j = 0;
+        for(i = i+11; m_string[i] != '\0'; i++, j++)
+            sid[j] = m_string[i];
+        sid[j] = '\0';
+        
+        printf("sid is :%s\n", sid);
+        if(GameManager::get_manager().joinGameSession(user, std::string(gname), std::string(sid)))
+        {
+            json sj = user->getSession()->getSessionInfo();
+            m_apiresponse = sj.dump();
+            return API_REQUEST;
+        }
+
+        //服务端应该主动推送新玩家加入信息给已经在这个房间的玩家 需要websocke链接
+        
+    }
+    else if(strncmp(p+1, "api-create-gomoku", 17) == 0)
+    {
+        //创建房间并进入
+        auto gSession = GameManager::get_manager().createGameSession(user, GAMETYPE::GOMOKU);
+        //返回游戏页面
+        // char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        // strcpy(m_url_real, "/gomoku.html");
+        // strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
+
+        // free(m_url_real);
+        //返回对局信息
+        json sj = user->getSession()->getSessionInfo();
+        m_apiresponse = sj.dump();
+        return API_REQUEST;
+    }
+    else if(strncmp(p+1, "api-create-snake", 16) == 0)
+    {
+
+    }
+    else if(strncmp(p+1, "api-gomoku-sessions", 19) == 0)
+    {
+        auto gomokuSessions = GameManager::get_manager().getGameSessions(GAMETYPE::GOMOKU);
+        json j = ptrListToJson(gomokuSessions);
+        m_apiresponse = j.dump();
+        printf("%s\n", m_apiresponse);
+        return API_REQUEST;
+    }
+    else if(strncmp(p+1, "api-snake-sessions", 18) == 0)
+    {
+        auto snakeSessions = GameManager::get_manager().getGameSessions(GAMETYPE::SNAKE);
+        json j = ptrListToJson(snakeSessions);
+        m_apiresponse = j.dump();
+        printf("%s\n", m_apiresponse);
+        return API_REQUEST;
+    }
+
+    else if(strncmp(p+1, "gomoku", 6) == 0)
+    {
+        /*
+    json{
+        {"sessionId", sessionId},
+        {"gameType", getGameType()},
+        {"maxUsers", maxUsers},
+        {"numUsers", numUsers},
+        {"status", status},
+        {"name", name},
+        {"id", id},
+        {"score", sc},
+        {"success", true}
+        }
+    };    
+            username
+            score
+        */
+       //返回gomoku页面
+        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/gomoku.html");
+        strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
+
+        free(m_url_real);
+    }
+    else if(strncmp(p+1, "api-get-sessioninfo", 19) == 0)
+    {
+        json sj = user->getSession()->getSessionInfo();
+        m_apiresponse = sj.dump();
+        
+    }
+    else if(strncmp(p+1, "api-up-websocket", 16) == 0 )
+    {
+        
+        return UP_REQUEST;
     }
     else
         strncpy(m_real_file + len, m_url, FILENAME_LEN - len - 1);
@@ -676,6 +834,46 @@ bool http_conn::process_write(HTTP_CODE ret)
                 return false;
         }
     }
+    case API_REQUEST:
+    {
+        add_status_line(200, "OK");
+        if(m_apiresponse.size() != 0)
+        {
+            printf("m_apiresponse is %s\n", m_apiresponse.c_str());
+            add_headers(m_apiresponse.size());
+            m_iv[0].iov_base = m_write_buf;
+            m_iv[0].iov_len = m_write_idx;
+            m_iv[1].iov_base = const_cast<char*>(m_apiresponse.c_str()); 
+            m_iv[1].iov_len = m_apiresponse.size();
+            m_iv_count = 2;
+            bytes_to_send = m_write_idx + m_apiresponse.size();
+            return true;
+        }
+        else
+        {
+            const char *ok_string = "<html><body></body></html>";
+            add_headers(strlen(ok_string));
+            if (!add_content(ok_string))
+                return false;
+        }
+    }
+    case UP_REQUEST:
+    {
+        add_status_line(101, "Switching Protocols");
+        std::string ackey = generate_websocket_accept_key(string(m_websocketKey));
+        
+        add_response("Upgrade: websocket\r\n");
+        add_response("Connection: Upgrade\r\n");
+        add_response("Sec-WebSocket-Accept:%s\r\n", ackey.c_str());
+        add_blank_line();
+        //不处理握手直接转到ws_conn，让ws_conn回应
+
+        conn* newconn = new ws_conn(*this);
+
+        replaceHandlerCallback(m_sockfd, this);
+
+        return true; //导致监听EPOLLOUT
+    }
     default:
         return false;
     }
@@ -700,3 +898,27 @@ void http_conn::process()
     }
     modfd(m_epollfd, m_sockfd, EPOLLOUT, m_TRIGMode);
 }
+
+
+void http_conn::handle_websocket_handshake()
+{
+
+}
+
+std::string http_conn::generate_websocket_accept_key(const std::string &key) {
+    const std::string GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    std::string key_with_guid = key + GUID;
+
+    // Calculate SHA-1 hash of the concatenated key and GUID
+    std::string sha1_hash = sha1(key_with_guid);
+
+    // Base64 encode the SHA-1 hash
+    return base64_encode(sha1_hash);
+}
+
+
+bool http_conn::append2w(const ByteBuffer&)
+{
+    return true;
+}
+

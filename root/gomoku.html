@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>五子棋房间</title>
+    <style>
+        .board {
+            display: grid;
+            grid-template-columns: repeat(15, 40px);
+            grid-template-rows: repeat(15, 40px);
+            gap: 1px;
+            margin-bottom: 20px;
+        }
+
+        .cell {
+            width: 40px;
+            height: 40px;
+            border: 1px solid #000;
+        }
+
+        .room-info {
+            margin-bottom: 20px;
+        }
+
+        .player-info {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+
+        .player {
+            width: 45%;
+        }
+
+        .placeholder {
+            color: gray;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="room-info">
+        <h3>房间信息</h3>
+        <p>房间ID: <span id="sessionId"></span></p>
+        <p>游戏类型: <span id="gameType"></span></p>
+        <p>最大玩家数: <span id="maxUsers"></span></p>
+        <p>当前玩家数: <span id="numUsers"></span></p>
+        <p>状态: <span id="status"></span></p>
+    </div>
+
+    <div class="player-info">
+        <div class="player">
+            <h4>玩家1</h4>
+            <p>名字: <span id="name1"></span></p>
+            <p>ID: <span id="id1"></span></p>
+            <p>得分: <span id="score1"></span></p>
+        </div>
+        <div class="player">
+            <h4>玩家2</h4>
+            <p>名字: <span id="name2" class="placeholder">等待中...</span></p>
+            <p>ID: <span id="id2" class="placeholder">--</span></p>
+            <p>得分: <span id="score2" class="placeholder">--</span></p>
+        </div>
+    </div>
+
+    <div class="board" id="gomokuBoard"></div>
+
+    <script>
+        // 初始化棋盘
+        function drawBoard() {
+            const board = document.getElementById('gomokuBoard');
+            for (let i = 0; i < 225; i++) {
+                const cell = document.createElement('div');
+                cell.className = 'cell';
+                board.appendChild(cell);
+            }
+        }
+
+        // 从服务器获取游戏数据
+        function fetchGameData() {
+            fetch('/api-gomoku')
+                .then(response => response.json())
+                .then(data => {
+                    // 填充房间信息
+                    document.getElementById('sessionId').textContent = data.sessionId || '';
+                    document.getElementById('gameType').textContent = data.gameType || '';
+                    document.getElementById('maxUsers').textContent = data.maxUsers || '';
+                    document.getElementById('numUsers').textContent = data.numUsers || '';
+                    document.getElementById('status').textContent = data.status || '';
+
+                    // 填充玩家信息（仅一个玩家的信息）
+                    document.getElementById('name1').textContent = data.name || '';
+                    document.getElementById('id1').textContent = data.id || '';
+                    document.getElementById('score1').textContent = data.score || '';
+                })
+                .catch(error => {
+                    console.error('Error fetching game data:', error);
+                });
+        }
+
+        // 初始化页面
+        window.onload = function() {
+            drawBoard();
+            fetchGameData();
+        };
+    </script>
+
+</body>
+</html>

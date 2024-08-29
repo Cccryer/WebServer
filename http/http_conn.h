@@ -20,14 +20,22 @@
 #include <sys/wait.h>
 #include <sys/uio.h>
 #include <map>
+#include <memory>
+#include <string>
 
 #include "../lock/locker.h"
 #include "../CGImysql/sql_connection_pool.h"
 #include "../timer/lst_timer.h"
 #include "../log/log.h"
+#include "../conn/conn.h"
 
-class http_conn
+// #include "../gamebox/user.h"
+
+class User;
+class ws_conn;
+class http_conn : public conn
 {
+    friend ws_conn;
 public:
     static const int FILENAME_LEN = 200;
     static const int READ_BUFFER_SIZE = 2048;
@@ -59,7 +67,9 @@ public:
         FORBIDDEN_REQUEST,
         FILE_REQUEST,
         INTERNAL_ERROR,
-        CLOSED_CONNECTION
+        CLOSED_CONNECTION,
+        API_REQUEST,
+        UP_REQUEST
     };
     enum LINE_STATUS
     {
@@ -73,18 +83,22 @@ public:
     ~http_conn() {}
 
 public:
-    void init(int sockfd, const sockaddr_in &addr, char *, int, int, string user, string passwd, string sqlname);
-    void close_conn(bool real_close = true);
-    void process();
-    bool read_once();
-    bool write();
-    sockaddr_in *get_address()
+    void init(int sockfd, const sockaddr_in &addr, char *, int, int, string user, string passwd, string sqlname) override;
+    void close_conn(bool real_close = true) override;
+    void process() override;
+    bool read_once() override;
+    bool write() override;
+    sockaddr_in *get_address() override
     {
         return &m_address;
     }
-    void initmysql_result(connection_pool *connPool);
-    int timer_flag;
-    int improv;
+    void initmysql_result(connection_pool *connPool) override;
+
+    bool append2w(const ByteBuffer&) override;
+
+
+    // int timer_flag;
+    // int improv;
 
 
 private:
@@ -107,11 +121,17 @@ private:
     bool add_linger();
     bool add_blank_line();
 
-public:
-    static int m_epollfd;
-    static int m_user_count;
-    MYSQL *mysql;
-    int m_state;  //读为0, 写为1
+
+    void handle_websocket_handshake();
+    std::string generate_websocket_accept_key(const std::string&);
+
+    void upToWs();
+
+// public:
+    // static int m_epollfd;
+    // static int m_user_count;
+    // MYSQL *mysql;
+    // int m_state;  //读为0, 写为1
 
 private:
     int m_sockfd;
@@ -135,7 +155,7 @@ private:
     struct iovec m_iv[2];
     int m_iv_count;
     int cgi;        //是否启用的POST
-    char *m_string; //存储请求头数据
+    char *m_string; //存储body数据
     int bytes_to_send;
     int bytes_have_send;
     char *doc_root;
@@ -147,6 +167,17 @@ private:
     char sql_user[100];
     char sql_passwd[100];
     char sql_name[100];
+
+    std::string m_apiresponse;
+    
+    std::shared_ptr<User> user;
+
+    //for websocket
+    bool m_websocketUp;
+    char* m_websocketKey;
+    int m_websocketVer;
+
+
 };
 
 #endif

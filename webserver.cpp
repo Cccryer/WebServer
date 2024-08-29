@@ -1,9 +1,29 @@
 #include "webserver.h"
+#include "./wsocket/ws_conn.h"
+
+std::list<conn*> pending_deletions;
+locker p_lock;
+void del_pending(client_data* no)
+{
+    p_lock.lock();
+    for(auto c : pending_deletions)
+        delete c;
+    pending_deletions.clear();
+    p_lock.unlock();
+}
 
 WebServer::WebServer()
 {
     //http_conn类对象
-    users = new http_conn[MAX_FD];
+    users = new conn*[MAX_FD];
+    for(int i = 0; i < MAX_FD; i++)
+    {
+        conn* newconn = new http_conn();
+        newconn->setCallback([this](int fd, conn* new_conn){
+            return this->replaceConn(fd, new_conn);
+        });
+        users[i] = newconn;
+    }
 
     //root文件夹路径
     char server_path[200];
@@ -15,7 +35,12 @@ WebServer::WebServer()
 
     //定时器
     users_timer = new client_data[MAX_FD];
-}
+
+    deltimer = false;
+};
+    
+
+
 
 WebServer::~WebServer()
 {
@@ -91,13 +116,13 @@ void WebServer::sql_pool()
     m_connPool->init("localhost", m_user, m_passWord, m_databaseName, 3306, m_sql_num, m_close_log);
 
     //初始化数据库读取表
-    users->initmysql_result(m_connPool);
+    (*users)->initmysql_result(m_connPool);
 }
 
 void WebServer::thread_pool()
 {
     //线程池
-    m_pool = new threadpool<http_conn>(m_actormodel, m_connPool, m_thread_num);
+    m_pool = new threadpool<conn*>(m_actormodel, m_connPool, m_thread_num);
 }
 
 void WebServer::eventListen()
@@ -135,7 +160,7 @@ void WebServer::eventListen()
     utils.init(TIMESLOT);
 
     //epoll创建内核事件表
-    epoll_event events[MAX_EVENT_NUMBER];
+    // epoll_event events[MAX_EVENT_NUMBER];
     m_epollfd = epoll_create(5);
     assert(m_epollfd != -1);
 
@@ -160,7 +185,17 @@ void WebServer::eventListen()
 
 void WebServer::timer(int connfd, struct sockaddr_in client_address)
 {
-    users[connfd].init(connfd, client_address, m_root, m_CONNTrigmode, m_close_log, m_user, m_passWord, m_databaseName);
+    /*
+        假设 conn* users[MAX_FD];
+        users[connfd] = new http_conn()
+        users[connfd].init(....);
+
+        转换成websocket: http_conn()没析构函数，之前一直存在内存
+
+        users[connfd]析构但不关闭文件描述符
+        users[connfd] = new web_conn()
+    */
+    users[connfd]->init(connfd, client_address, m_root, m_CONNTrigmode, m_close_log, m_user, m_passWord, m_databaseName);
 
     //初始化client_data数据
     //创建定时器，设置回调函数和超时时间，绑定用户数据，将定时器添加到链表中
@@ -290,18 +325,18 @@ void WebServer::dealwithread(int sockfd)
         }
 
         //若监测到读事件，将该事件放入请求队列
-        m_pool->append(users + sockfd, 0);
+        m_pool->append(*(users + sockfd), 0);
 
         while (true)
         {
-            if (1 == users[sockfd].improv)
+            if (1 == users[sockfd]->improv)
             {
-                if (1 == users[sockfd].timer_flag)
+                if (1 == users[sockfd]->timer_flag)
                 {
                     deal_timer(timer, sockfd);
-                    users[sockfd].timer_flag = 0;
+                    users[sockfd]->timer_flag = 0;
                 }
-                users[sockfd].improv = 0;
+                users[sockfd]->improv = 0;
                 break;
             }
         }
@@ -309,12 +344,12 @@ void WebServer::dealwithread(int sockfd)
     else
     {
         //proactor
-        if (users[sockfd].read_once())
+        if (users[sockfd]->read_once())
         {
-            LOG_INFO("deal with the client(%s)", inet_ntoa(users[sockfd].get_address()->sin_addr));
+            LOG_INFO("deal with the client(%s)", inet_ntoa(users[sockfd]->get_address()->sin_addr));
 
             //若监测到读事件，将该事件放入请求队列
-            m_pool->append_p(users + sockfd);
+            m_pool->append_p(*(users + sockfd));
 
             if (timer)
             {
@@ -339,18 +374,18 @@ void WebServer::dealwithwrite(int sockfd)
             adjust_timer(timer);
         }
 
-        m_pool->append(users + sockfd, 1);
+        m_pool->append(*(users + sockfd), 1);
 
         while (true)
         {
-            if (1 == users[sockfd].improv)
+            if (1 == users[sockfd]->improv)
             {
-                if (1 == users[sockfd].timer_flag)
+                if (1 == users[sockfd]->timer_flag)
                 {
                     deal_timer(timer, sockfd);
-                    users[sockfd].timer_flag = 0;
+                    users[sockfd]->timer_flag = 0;
                 }
-                users[sockfd].improv = 0;
+                users[sockfd]->improv = 0;
                 break;
             }
         }
@@ -358,9 +393,9 @@ void WebServer::dealwithwrite(int sockfd)
     else
     {
         //proactor
-        if (users[sockfd].write())
+        if (users[sockfd]->write())
         {
-            LOG_INFO("send data to the client(%s)", inet_ntoa(users[sockfd].get_address()->sin_addr));
+            LOG_INFO("send data to the client(%s)", inet_ntoa(users[sockfd]->get_address()->sin_addr));
 
             if (timer)
             {
@@ -432,3 +467,21 @@ void WebServer::eventLoop()
         }
     }
 }
+
+
+void WebServer::replaceConn(int fd, conn* new_conn)
+{
+    users[fd] = new_conn;
+    pending_deletions.push_back(new_conn);
+    if(!deltimer)
+    {
+        del_pending_timer = new util_timer;
+        del_pending_timer->cb_func = del_pending;
+        del_pending_timer->user_data = NULL;
+        del_pending_timer->expire = time(NULL) + 6 * TIMESLOT;
+        utils.m_timer_lst.add_timer(del_pending_timer);
+        deltimer = true;
+    }
+
+}
+

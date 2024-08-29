@@ -1,0 +1,17 @@
+#include "game_manager.h"
+#include "game.h"
+#include "game_session.h"
+#include "user.h"
+#include "gomoku.h"
+#include<iostream>
+int main()
+{
+    auto user1 = GameManager::get_manager().createUser("fucker");
+    auto user2 = GameManager::get_manager().createUser("cryer");
+    GameManager::get_manager().createGameSession(user1, GAMETYPE::GOMOKU);
+    GameManager::get_manager().joinGameSession(user2, "gomoku", "1");
+    json j = user1->getSession()->getSessionInfo();
+    std::string s = j.dump();
+    printf("%s\n", s.c_str());
+    return 0;
+}

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Sessions</title>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const gameType = urlParams.get('game'); // 获取游戏类型，例如 'Gomoku'
+            const apiBaseUrl = `/api-${gameType}-sessions`;
+            const apiJoinUrl = `/api-join-${gameType}`;
+
+            // 更新对局列表并在页面上展示
+            function updateSessionList(data) {
+                const sessionList = document.getElementById('session-list');
+                sessionList.innerHTML = ''; // 清空列表
+
+                data.forEach(session => {
+                    const listItem = document.createElement('li');
+                    
+                    // 显示对局信息
+                    const sessionInfo = document.createElement('div');
+                    sessionInfo.textContent = `Session ID: ${session.sessionId}, Game Type: ${session.gameType}, Users: ${session.numUsers}/${session.maxUsers}, Status: ${session.status}`;
+
+                    // 创建加入按钮
+                    const joinButton = document.createElement('button');
+                    joinButton.textContent = 'Join';
+                    joinButton.onclick = function() {
+                        const joinUrl = `${apiJoinUrl}?gameType=${gameType}&sessionId=${session.sessionId}`;
+                        fetch(joinUrl, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded'
+                            },
+                            body: `gameType=${gameType}&sessionId=${session.sessionId}`
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.success) {
+                                const newSessionId = data.sessionId; // 从响应中获取新会话 ID
+                                const newUserName = data.name;
+                                const newUserScore = data.score;
+                                const newUserNum = data.numUsers;
+                                const newUserMax = data.maxUsers;
+                                const newUrl = `/gomoku.html?sessionId=${newSessionId}&gameType=${gameType}&userName=${newUserName}
+                                    &userMax=${newUserMax}&userNum=${newUserNum}&userScore=${newUserScore}`;
+                                window.open(newUrl, '_blank'); // 在新标签页中打开新页面
+                            } else {
+                                alert('Error joining session.');
+                            }
+                        })
+                        .catch(error => console.error('Error joining session:', error));
+                    };
+
+                    listItem.appendChild(sessionInfo);
+                    listItem.appendChild(joinButton);
+                    sessionList.appendChild(listItem);
+                });
+            }
+
+            // 获取最新对局列表
+            function fetchSessions() {
+                fetch(apiBaseUrl)
+                    .then(response => response.json())
+                    .then(data => updateSessionList(data))
+                    .catch(error => console.error('Error fetching session list:', error));
+            }
+
+            // 页面加载时获取最新对局列表
+            fetchSessions();
+
+            const createButton = document.getElementById('create-session');
+            createButton.onclick = function() {
+                fetch(`/api-create-${gameType}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        gameType: gameType // 当前游戏类型
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('Session created successfully!');
+                        const newSessionId = data.sessionId; // 从响应中获取新会话 ID
+                        const newUserName = data.name;
+                        const newUserScore = data.score;
+                        const newUserNum = data.numUsers;
+                        const newUserMax = data.maxUsers;
+                        const newUrl = `/gomoku.html?sessionId=${newSessionId}&gameType=${gameType}&userName=${newUserName}
+                            &userMax=${newUserMax}&userNum=${newUserNum}&userScore=${newUserScore}`;
+                        window.open(newUrl, '_blank'); // 在新标签页中打开新页面
+                    } else {
+                        alert('Error creating session.');
+                    }
+                })
+                .catch(error => console.error('Error creating session:', error));
+            };
+
+            // 刷新对局按钮的事件处理
+            const refreshButton = document.getElementById('refresh-session');
+            refreshButton.onclick = function() {
+                fetchSessions();
+            };
+        });
+    </script>
+</head>
+<body>
+    <h1>Game Sessions</h1>
+    <h2>Available Sessions:</h2>
+    <ul id="session-list"></ul>
+    <button id="create-session">Create New Session</button>
+    <button id="refresh-session">Refresh Sessions</button>
+</body>
+</html>

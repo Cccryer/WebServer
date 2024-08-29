@@ -1,27 +1,38 @@
 <!DOCTYPE html>
-<html>
-    <head>
-        <meta charset="UTF-8">
-        <title>WebServer</title>
-    </head>
-    <body>
-    <br/>
-    <br/>
-    <div align="center"><font size="5"> <strong>是时候做出选择了</strong></font></div>
-	<br/>
-		<br/>
-		<form action="5" method="post">
- 			<div align="center"><button type="submit">xxx.jpg</button></div>
-                </form>
-		<br/>
-                <form action="6" method="post">
-                        <div align="center"><button type="submit" >xxx.avi</button></div>
-                </form>
-		<br/>
-		<form action="7" method="post">
- 			<div align="center"><button type="submit">关注我</button></div>
-                </form>
-		
-        </div>
-    </body>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome</title>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 获取游戏列表
+            fetch('/api-gamelist')
+                .then(response => response.json())
+                .then(data => {
+                    // 更新页面上的游戏列表
+                    const gameList = document.getElementById('game-list');
+                    data.forEach(game => {
+                        const listItem = document.createElement('li');
+                        const gameButton = document.createElement('button');
+                        gameButton.textContent = game;
+
+                        // 将游戏类型作为参数传递到 sessionslist 页面
+                        gameButton.onclick = function() {
+                            window.location.href = `/sessionslist.html?game=${encodeURIComponent(game)}`;
+                        };
+
+                        listItem.appendChild(gameButton);
+                        gameList.appendChild(listItem);
+                    });
+                })
+                .catch(error => console.error('Error fetching game list:', error));
+        });
+    </script>
+</head>
+<body>
+    <h1>Welcome to the Game Platform!</h1>
+    <h2>Available Games:</h2>
+    <ul id="game-list"></ul>
+</body>
 </html>

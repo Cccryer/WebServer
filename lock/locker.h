@@ -68,6 +68,42 @@ public:
 private:
     pthread_mutex_t m_mutex;
 };
+
+class rwlocker
+{
+public:
+    rwlocker()
+    {
+        if (pthread_rwlock_init(&m_rwlock, NULL) != 0)
+        {
+            throw std::exception();
+        }
+    }
+    ~rwlocker()
+    {
+        pthread_rwlock_destroy(&m_rwlock);
+    }
+    bool rdlock()
+    {
+        return pthread_rwlock_rdlock(&m_rwlock) == 0;
+    }
+    bool wrlock()
+    {
+        return pthread_rwlock_wrlock(&m_rwlock) == 0;
+    }
+    bool unlock()
+    {
+        return pthread_rwlock_unlock(&m_rwlock) == 0;
+    }
+    pthread_rwlock_t *get()
+    {
+        return &m_rwlock;
+    }
+
+private:
+    pthread_rwlock_t m_rwlock;
+};
+
 class cond
 {
 public:
